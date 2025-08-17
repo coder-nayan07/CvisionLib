@@ -1,53 +1,133 @@
 import cv2
 import numpy as np
+import os
+import sys
+import time
 
-# Load the full image
-image = cv2.imread(r"D:\autonomous_driving_system\computer vision\images\template_matching.jpg")
 
-# Define the region to crop as the template (adjust coordinates as needed)
-x, y, w, h = 400, 200, 100, 100  # Example coordinates
-template = image[y:y+h, x:x+w]  # Crop a part of the image
+def load_images(image_path: str, template_path: str) -> tuple:
+    """Loads the main image and template image."""
+    image = cv2.imread(image_path)
+    template = cv2.imread(template_path)
 
-# Save the template
-cv2.imwrite("template.png", template)
+    if image is None:
+        sys.exit(f"Error: Could not load image from '{image_path}'")
+    if template is None:
+        sys.exit(f"Error: Could not load template from '{template_path}'")
+        
+    return image, template
 
-def sliding_window_matching(image, template):
-
-    img_h, img_w,_ = image.shape
-    temp_h, temp_w,_ = template.shape
+def manual_template_matching(image_gray: np.ndarray, template_gray: np.ndarray) -> tuple:
+    """
+    Performs template matching using a manual sliding window with SSD.
+    Note: This is very slow and intended for educational purposes.
+    """
+    img_h, img_w = image_gray.shape
+    temp_h, temp_w = template_gray.shape
     
-    min_value = float('inf')
-    best_x, best_y = -1, -1
+    min_ssd = float('inf')
+    best_loc = (0, 0)
     
-    # Sliding window approach
+    # Slide the template over the main image
     for y in range(img_h - temp_h + 1):
         for x in range(img_w - temp_w + 1):
-            # Extract region of interest (ROI)
-            roi = image[y:y+temp_h, x:x+temp_w]
+            # Extract the region of interest (ROI)
+            roi = image_gray[y:y+temp_h, x:x+temp_w]
             
             # Compute Sum of Squared Differences (SSD)
-            ssd = np.sum((roi - template) ** 2)
+            ssd = np.sum((roi.astype(np.float32) - template_gray.astype(np.float32)) ** 2)
             
-            # Update minimum value position
-            if ssd < min_value:
-                min_value = ssd
-                best_x, best_y = x, y
-    
-    return best_x, best_y, min_value
+            if ssd < min_ssd:
+                min_ssd = ssd
+                best_loc = (x, y)
+                
+    return best_loc
 
-
-def draw_bounding_box(image, best_x, best_y, temp_w, temp_h):
+def opencv_template_matching(image_gray: np.ndarray, template_gray: np.ndarray, method) -> tuple:
+    """Performs template matching using OpenCV's optimized function."""
+    result = cv2.matchTemplate(image_gray, template_gray, method)
     
-    cv2.rectangle(image, (best_x, best_y), (best_x + temp_w, best_y + temp_h), (0, 255, 0), 2)
-    
-    # Show the image
-    cv2.imshow("Detected Match", image)
-    cv2.imshow("Template", template)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    # For SSD-based methods, the best match is the minimum value.
+    # For correlation-based methods, it's the maximum.
+    if method in [cv2.TM_SQDIFF, cv2.TM_SQDIFF_NORMED]:
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+        top_left = min_loc
+    else:
+        min_val, max_val, min_loc, max_loc = cv2.minMaxLoc(result)
+        top_left = max_loc
+        
+    return top_left
 
-bst_x, bst_y, min_v = sliding_window_matching(image,template)
-print(bst_x)
-print(bst_y)
-print(min_v)
-draw_bounding_box(image,bst_x,bst_y,w,h)
+def save_and_visualize_result(
+    image_color: np.ndarray,
+    template: np.ndarray,
+    location: tuple,
+    output_path: str,
+    show_window: bool
+):
+    """Draws a bounding box, saves the result, and optionally displays it."""
+    output_image = image_color.copy()
+    top_left = location
+    h, w = template.shape[:2]
+    bottom_right = (top_left[0] + w, top_left[1] + h)
+    
+    # Draw the bounding box
+    cv2.rectangle(output_image, top_left, bottom_right, (0, 255, 0), 2)
+    
+    # Save the result
+    cv2.imwrite(output_path, output_image)
+    print(f"Result saved to: {output_path}")
+
+    # Display the result if requested
+    if show_window:
+        cv2.imshow("Detected Match", output_image)
+        cv2.imshow("Template", template)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+## Main Execution
+
+if __name__ == "__main__":
+
+    # --- Configuration ---
+    IMAGE_PATH = "images/template_matching.jpg"
+    TEMPLATE_PATH = "images/template.png" # The template should be a separate file
+    OUTPUT_DIR = "output"
+    
+    # --- Control Flags ---
+    # Set to True to use the fast OpenCV function, False for the slow manual method
+    USE_OPENCV_OPTIMIZED = True
+    VISUALIZE = True
+    
+    # OpenCV's matching method (TM_SQDIFF_NORMED is often a good choice)
+    MATCHING_METHOD = cv2.TM_SQDIFF_NORMED
+    
+    # --- Script ---
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    image, template = load_images(IMAGE_PATH, TEMPLATE_PATH)
+    
+    # Use grayscale images for matching, as color adds complexity and computation
+    image_gs = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    template_gs = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+    
+    start_time = time.time()
+    
+    if USE_OPENCV_OPTIMIZED:
+        print("Using OpenCV's optimized template matching...")
+        best_location = opencv_template_matching(image_gs, template_gs, MATCHING_METHOD)
+    else:
+        print("Using manual sliding window matching. This will be very slow.")
+        best_location = manual_template_matching(image_gs, template_gs)
+
+    end_time = time.time()
+    print(f"Matching complete. Found best match at: {best_location}")
+    print(f"Time taken: {end_time - start_time:.4f} seconds.")
+
+    # Prepare output name and visualize/save the result
+    method_name = "opencv" if USE_OPENCV_OPTIMIZED else "manual"
+    base_name = os.path.splitext(os.path.basename(IMAGE_PATH))[0]
+    output_filename = os.path.join(OUTPUT_DIR, f"{base_name}_matched_{method_name}.png")
+
+    save_and_visualize_result(
+        image, template, best_location, output_filename, show_window=VISUALIZE
+    )

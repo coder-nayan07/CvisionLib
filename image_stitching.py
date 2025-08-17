@@ -1,169 +1,147 @@
-import cv2 as cv
+import cv2
 import numpy as np
-import scipy.ndimage as ndimage
+import os
+import sys
+import scipy.ndimage
 
-def gaussian_kernel(size, sigma):
-    ax = np.linspace(-(size // 2), size // 2, size)
-    xx, yy = np.meshgrid(ax, ax)
-    kernel = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
-    return kernel / np.sum(kernel)
+def detect_and_match_features(img1: np.ndarray, img2: np.ndarray, lowe_ratio: float = 0.75) -> tuple:
+    """
+    Detects features, computes descriptors, and finds good matches using the ratio test.
+    """
+    # 1. Use SIFT to detect and compute features in both images
+    sift = cv2.SIFT_create()
+    kp1, desc1 = sift.detectAndCompute(img1, None)
+    kp2, desc2 = sift.detectAndCompute(img2, None)
 
-def normalized_laplacian_of_gaussian(size, sigma):
-    g_kernel = gaussian_kernel(size, sigma)
-    log_kernel = ndimage.laplace(g_kernel)
-    return sigma * sigma * log_kernel
+    if desc1 is None or desc2 is None:
+        return [], [], [], []
 
-def build_scale_space(image, sigmas, size):
-    scale_space = []
-    for sigma in sigmas:
-        log_kernel = normalized_laplacian_of_gaussian(size, sigma)
-        response = cv.filter2D(image, cv.CV_64F, log_kernel)
-        scale_space.append(response)
-    return np.array(scale_space)
+    # 2. Use BFMatcher with knnMatch to find the 2 best matches for each descriptor
+    bf = cv2.BFMatcher(cv2.NORM_L2)
+    all_matches = bf.knnMatch(desc1, desc2, k=2)
 
-def non_maximum_suppression(scale_space, threshold):
-    max_filtered = ndimage.maximum_filter(scale_space, size=(3, 3, 3))
-    blobs = (scale_space == max_filtered) & (scale_space > threshold)
-    return blobs
+    # 3. Apply Lowe's ratio test to find good matches
+    good_matches = []
+    for m, n in all_matches:
+        if m.distance < lowe_ratio * n.distance:
+            good_matches.append(m)
+            
+    return kp1, kp2, desc1, desc2, good_matches
 
-def detect_blobs(image, sigmas, size, threshold):
-    scale_space = build_scale_space(image, sigmas, size)
-    blob_candidates = non_maximum_suppression(scale_space, threshold)
-    blob_coords = np.argwhere(blob_candidates)
+def find_homography(matches: list, kp1: list, kp2: list, ransac_thresh: float) -> tuple:
+    """Finds the homography matrix using RANSAC."""
+    if len(matches) < 4:
+        return None, None
+        
+    pts1 = np.float32([kp1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
+    pts2 = np.float32([kp2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
     
-    blobs = []
-    for sigma_index, y, x in blob_coords:
-        sigma_val = sigmas[sigma_index]
-        radius = sigma_val
-        blobs.append((x, y, radius))
+    H, mask = cv2.findHomography(pts1, pts2, cv2.RANSAC, ransac_thresh)
+    return H, mask
+
+def create_stitched_image(img1: np.ndarray, img2: np.ndarray, H: np.ndarray) -> np.ndarray:
+    """Warps and stitches two images together using a homography matrix."""
+    h1, w1 = img1.shape[:2]
+    h2, w2 = img2.shape[:2]
+
+    corners1 = np.float32([[0, 0], [0, h1], [w1, h1], [w1, 0]]).reshape(-1, 1, 2)
+    corners2 = np.float32([[0, 0], [0, h2], [w2, h2], [w2, 0]]).reshape(-1, 1, 2)
     
-    return blobs
+    corners1_transformed = cv2.perspectiveTransform(corners1, H)
+    all_corners = np.vstack((corners1_transformed, corners2))
 
-def draw_blobs(image, blobs):
-    for x, y, radius in blobs:
-        cv.circle(image, (x, y), int(radius), (0, 0, 255), 1)
-    return image
+    x_min, y_min = np.int32(all_corners.min(axis=0).ravel())
+    x_max, y_max = np.int32(all_corners.max(axis=0).ravel())
+    
+    translation_dist = [-x_min, -y_min]
+    H_translation = np.array([[1, 0, translation_dist[0]], [0, 1, translation_dist[1]], [0, 0, 1]])
 
-# Read images
-img1_path = r"D:\autonomous_driving_system\computer vision\images\room2.jpg"
-img2_path = r"D:\autonomous_driving_system\computer vision\images\room1.jpg"
+    output_size = (x_max - x_min, y_max - y_min)
+    stitched_img = cv2.warpPerspective(img1, H_translation @ H, output_size)
+    stitched_img[translation_dist[1]:h2 + translation_dist[1], translation_dist[0]:w2 + translation_dist[0]] = img2
+    
+    return stitched_img
 
-img1 = cv.imread(img1_path)
-img2 = cv.imread(img2_path)
+# --- Visualization ---
 
-if img1 is None or img2 is None:
-    print("Error: One or both image paths are incorrect.")
-    exit()
+def visualize_matches(img1, kp1, img2, kp2, matches, mask, title):
+    """Draws and displays feature matches."""
+    matchesMask = None
+    if mask is not None:
+        matchesMask = mask.ravel().tolist()
+    
+    draw_params = dict(matchColor=(0, 255, 0), singlePointColor=None, matchesMask=matchesMask, flags=2)
+    match_img = cv2.drawMatches(img1, kp1, img2, kp2, matches, None, **draw_params)
+    cv2.imshow(title, match_img)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+    
+# --- Main Execution ---
+if __name__ == "__main__":
 
-# Convert to grayscale
-img1_gs = cv.cvtColor(img1, cv.COLOR_BGR2GRAY)
-img2_gs = cv.cvtColor(img2, cv.COLOR_BGR2GRAY)
+    # --- Configuration ---
+    IMAGE_PATHS = {
+        'img1': "images/image_l.jpg",
+        'img2': "images/image_r.jpg"
+    }
+    OUTPUT_DIR = "output"
+    VISUALIZE_STEPS = True  # Set to False to disable intermediate visualizations
+    TARGET_SIZE = (800, 600)
+    
+    # Matching parameters
+    LOWE_RATIO = 0.75
+    RANSAC_THRESH = 4.0
 
-# Resize for consistency
-img1_r = cv.resize(img1_gs, (400, 400))
-img2_r = cv.resize(img2_gs, (400, 400))
+    # --- Script ---
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Blob Detection Parameters
-min_sigma = 3
-max_sigma = 50
-num_sigma = 20
-sigmas = np.linspace(min_sigma, max_sigma, num_sigma)
+    # 1. Load and preprocess images
+    img1_color = cv2.imread(IMAGE_PATHS['img1'])
+    img2_color = cv2.imread(IMAGE_PATHS['img2'])
+    if img1_color is None or img2_color is None:
+        sys.exit("Error: Could not load one or both images.")
+        
+    img1 = cv2.resize(cv2.cvtColor(img1_color, cv2.COLOR_BGR2GRAY), TARGET_SIZE)
+    img2 = cv2.resize(cv2.cvtColor(img2_color, cv2.COLOR_BGR2GRAY), TARGET_SIZE)
+    img1_color_resized = cv2.resize(img1_color, TARGET_SIZE)
+    img2_color_resized = cv2.resize(img2_color, TARGET_SIZE)
 
-kernel_size = 9
-threshold = 0.3 # Lowered threshold to detect more blobs
+    # 2. Detect features and find good matches
+    kp1, kp2, desc1, desc2, good_matches = detect_and_match_features(img1, img2, LOWE_RATIO)
+    print(f"Detected {len(kp1)} features in image 1 and {len(kp2)} features in image 2.")
+    print(f"Found {len(good_matches)} good matches after ratio test.")
+    
+    # 3. Find homography with RANSAC
+    H, mask = find_homography(good_matches, kp1, kp2, RANSAC_THRESH)
+    if H is None:
+        sys.exit("Error: Could not find a valid homography. Images may not overlap enough.")
+    print(f"Found {np.sum(mask)} inlier matches after RANSAC.")
+    
+    # 4. Visualize RANSAC-filtered matches if enabled
+    if VISUALIZE_STEPS:
+        visualize_matches(img1_color_resized, kp1, img2_color_resized, kp2, good_matches, mask, "RANSAC Filtered Matches")
 
-# Detect blobs in both images
-blobs1 = detect_blobs(img1_r, sigmas, kernel_size, threshold)
-blobs2 = detect_blobs(img2_r, sigmas, kernel_size, threshold)
-
-# Convert blob coordinates to cv.KeyPoint objects
-keypoints1 = [cv.KeyPoint(float(x), float(y), radius * 2) for (x, y, radius) in blobs1]
-keypoints2 = [cv.KeyPoint(float(x), float(y), radius * 2) for (x, y, radius) in blobs2]
-
-# Initialize SIFT detector
-sift = cv.SIFT_create()
-
-# Compute descriptors
-if keypoints1 and keypoints2:
-    keypoints1, descriptors1 = sift.compute(img1_r, keypoints1)
-    keypoints2, descriptors2 = sift.compute(img2_r, keypoints2)
-else:
-    print("Error: No keypoints detected in one or both images.")
-    exit()
-
-if descriptors1 is None or descriptors2 is None:
-    print("Error: No descriptors found.")
-    exit()
-
-# Initialize Brute-Force matcher
-bf = cv.BFMatcher(cv.NORM_L2, crossCheck=True)
-
-# Match descriptors
-matches = bf.match(descriptors1, descriptors2)
-
-# Sort matches by distance (best matches first)
-matches = sorted(matches, key=lambda x: x.distance)
-
-# Draw top N matches
-N = min(20, len(matches))
-N = len(matches)
-matched_img = cv.drawMatches(img1_r, keypoints1, img2_r, keypoints2, matches[:N], None, flags=cv.DrawMatchesFlags_NOT_DRAW_SINGLE_POINTS)
-
-
-# Display the matched image
-cv.imshow('Matched Features', matched_img)
-cv.waitKey(0)
-cv.destroyAllWindows()
-
-
-# storing matched points
-pts1 = np.float32([keypoints1[m.queryIdx].pt for m in matches]).reshape(-1, 1, 2)
-pts2 = np.float32([keypoints2[m.trainIdx].pt for m in matches]).reshape(-1, 1, 2)
-
-# Apply RANSAC to filter good matches
-H, mask = cv.findHomography(pts1, pts2, cv.RANSAC, 5.0)
-
-# Draw matches after RANSAC
-matchesMask = mask.ravel().tolist()
-draw_params = dict(matchColor=(0, 255, 0),  # Green matches are inliers
-                   singlePointColor=None,
-                   matchesMask=matchesMask,
-                   flags=2)
-
-matched_img = cv.drawMatches(img1_r, keypoints1, img2_r, keypoints2, matches, None, **draw_params)
-
-# Show the result
-cv.imshow("RANSAC Matches", matched_img)
-cv.waitKey(0)
-cv.destroyAllWindows()
+    # 5. Stitch images using the original full-resolution images for best quality
+    # Re-calculate homography on original points for higher accuracy
+    full_kp1, full_kp2, _, _, full_good_matches = detect_and_match_features(
+        cv2.cvtColor(img1_color, cv2.COLOR_BGR2GRAY), 
+        cv2.cvtColor(img2_color, cv2.COLOR_BGR2GRAY), 
+        LOWE_RATIO
+    )
+    H_full, _ = find_homography(full_good_matches, full_kp1, full_kp2, RANSAC_THRESH)
+    
+    if H_full is not None:
+        stitched_result = create_stitched_image(img1_color, img2_color, H_full)
+    else:
+        print("Stitching with resized images due to failure on full-res.")
+        stitched_result = create_stitched_image(img1_color_resized, img2_color_resized, H)
 
 
-h1, w1 = img1_r.shape[:2]
-h2, w2 = img2_r.shape[:2]
-
-# Get the corners of img1 and transform them using H
-corners_img1 = np.float32([[0, 0], [0, h1], [w1, h1], [w1, 0]]).reshape(-1, 1, 2)
-corners_img2 = np.float32([[0, 0], [0, h2], [w2, h2], [w2, 0]]).reshape(-1, 1, 2)
-
-# Transform img1's corners to the new perspective
-transformed_corners = cv.perspectiveTransform(corners_img1, H)
-
-# Find the bounding box of the combined image
-all_corners = np.vstack((transformed_corners, corners_img2))
-
-x_min, y_min = np.int32(all_corners.min(axis=0).ravel() - 0.5)
-x_max, y_max = np.int32(all_corners.max(axis=0).ravel() + 0.5)
-
-# Create the translation matrix to shift images into the positive region
-translation_matrix = np.array([[1, 0, -x_min], [0, 1, -y_min], [0, 0, 1]])
-
-# Warp img1 to the new perspective
-stitched_img = cv.warpPerspective(img1_r, translation_matrix @ H, (x_max - x_min, y_max - y_min))
-
-# Paste img2 onto the stitched image
-stitched_img[-y_min:h2 - y_min, -x_min:w2 - x_min] = img2_r
-
-# Show result
-cv.imshow("Stitched Image", stitched_img)
-cv.waitKey(0)
-cv.destroyAllWindows()
+    # 6. Save and display the final result
+    output_filename = os.path.join(OUTPUT_DIR, "stitched_image_improved.png")
+    cv2.imwrite(output_filename, stitched_result)
+    print(f"Stitched image saved to: {output_filename}")
+    
+    cv2.imshow("Stitched Image", stitched_result)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()

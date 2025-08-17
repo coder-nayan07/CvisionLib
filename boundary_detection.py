@@ -1,50 +1,102 @@
-import cv2 as cv
+import cv2
 import numpy as np
+import os
+import sys
 from skimage.filters import gaussian
 from skimage.segmentation import active_contour
+from skimage.util import img_as_float
 
-img = cv.imread(r"images/coin.png")
+def load_and_preprocess_image(path: str, size: tuple) -> tuple:
+    # Loads, resizes, and converts an image to grayscale.
+    image_bgr = cv2.imread(path)
+    if image_bgr is None:
+        sys.exit(f"Error: Could not read image from '{path}'")
+        
+    image_bgr = cv2.resize(image_bgr, size)
+    image_gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
+    
+    return image_bgr, image_gray
 
-size =(400,400)
-image = cv.resize(img,size)
-image = cv.cvtColor(image, cv.COLOR_BGR2GRAY)
-cv.imshow("coin",image)
-cv.waitKey()
-cv.destroyAllWindows()
+def create_rectangular_contour(center: tuple, width: int, height: int, num_points: int) -> np.ndarray:
+    # Creates an initial rectangular contour for the snake algorithm.
+    x, y = center
+    half_w, half_h = width // 2, height // 2
+    
+    top = np.array([np.linspace(x - half_w, x + half_w, num_points), np.full(num_points, y - half_h)]).T
+    right = np.array([np.full(num_points, x + half_w), np.linspace(y - half_h, y + half_h, num_points)]).T
+    bottom = np.array([np.linspace(x + half_w, x - half_w, num_points), np.full(num_points, y + half_h)]).T
+    left = np.array([np.full(num_points, x - half_w), np.linspace(y + half_h, y - half_h, num_points)]).T
+    
+    contour = np.concatenate([top, right, bottom, left])
+    # Convert (x, y) to scikit-image's expected (row, col) format
+    return np.flip(contour, axis=1)
 
-sigma = 2
-smoothed = gaussian(image, sigma=sigma)
+def find_snake_contour(image_gray: np.ndarray, initial_contour: np.ndarray, alpha: float, beta: float, gamma: float) -> np.ndarray:
+    # Finds the optimal contour using the active contour model.
+    image_float = img_as_float(image_gray)
+    
+    snake = active_contour(
+        gaussian(image_float, sigma=3, preserve_range=False),
+        initial_contour,
+        alpha=alpha,
+        beta=beta,
+        gamma=gamma
+    )
+    return snake
 
-# Compute gradient magnitude
-grad_x = cv.Sobel(smoothed, cv.CV_64F, 1, 0, ksize=7)
-grad_y = cv.Sobel(smoothed, cv.CV_64F, 0, 1, ksize=7)
-gradient_magnitude = np.sqrt(grad_x**2 + grad_y**2)
+def visualize_and_save_contour(
+    image_bgr: np.ndarray, 
+    snake_contour: np.ndarray, 
+    output_path: str, 
+    show_window: bool
+):
+    # Draws the final contour, saves the image, and optionally displays it.
+    output_image = image_bgr.copy()
+    
+    # Convert contour points for OpenCV drawing
+    points = snake_contour[:, [1, 0]].astype(np.int32)
+    
+    cv2.polylines(output_image, [points], isClosed=True, color=(0, 0, 255), thickness=2)
+    cv2.imwrite(output_path, output_image)
+    print(f"Result saved to: {output_path}")
 
-# Define rectangle parameters
-x_c, y_c = 100, 100  # Center of the rectangle
-w, h = 500, 500       
-num_points_per_side = 50
+    if show_window:
+        cv2.imshow("Active Contour Result", output_image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
-# Generate rectangle points
-top = np.linspace([x_c - w//2, y_c - h//2], [x_c + w//2, y_c - h//2], num_points_per_side)
-right = np.linspace([x_c + w//2, y_c - h//2], [x_c + w//2, y_c + h//2], num_points_per_side)
-bottom = np.linspace([x_c + w//2, y_c + h//2], [x_c - w//2, y_c + h//2], num_points_per_side)
-left = np.linspace([x_c - w//2, y_c + h//2], [x_c - w//2, y_c - h//2], num_points_per_side)
+# --- Main Execution ---
+if __name__ == "__main__":
+    
+    # --- Configuration ---
+    IMAGE_PATH = "images/coin.png"
+    OUTPUT_DIR = "output"
+    VISUALIZE = True  # Set to False to disable display window
 
-# Combine all sides into a single contour array
-rect_contour = np.vstack([top, right, bottom, left])
+    TARGET_SIZE = (400, 400)
+    
+    # Initial contour parameters
+    CONTOUR_CENTER = (200, 200)
+    CONTOUR_SIZE = (300, 300)
+    POINTS_PER_SIDE = 100
 
-# Perform Active Contour Model optimization
-snake = active_contour(gradient_magnitude, rect_contour, alpha=0.1, beta=0.3, gamma=0.1)
+    # Active contour algorithm parameters
+    ALPHA = 0.015  # Elasticity
+    BETA = 10.0    # Smoothness
+    GAMMA = 0.001  # Step size
+    
+    # --- Script ---
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Draw final contour on the image
-contour_image = cv.cvtColor(image, cv.COLOR_GRAY2BGR)
-for i in range(len(snake) - 1):
-    cv.line(contour_image, (int(snake[i][1]), int(snake[i][0])), 
-                             (int(snake[i+1][1]), int(snake[i+1][0])), 
-                             (0, 255, 0), 2)
+    print(f"Processing image: {IMAGE_PATH}")
+    color_img, gray_img = load_and_preprocess_image(IMAGE_PATH, TARGET_SIZE)
 
-# Show results
-cv.imshow("Active Contour", contour_image)
-cv.waitKey(0)
-cv.destroyAllWindows()
+    init_contour = create_rectangular_contour(CONTOUR_CENTER, *CONTOUR_SIZE, POINTS_PER_SIDE)
+
+    final_contour = find_snake_contour(gray_img, init_contour, ALPHA, BETA, GAMMA)
+    print("Contour optimization complete.")
+
+    base_name = os.path.splitext(os.path.basename(IMAGE_PATH))[0]
+    output_filename = os.path.join(OUTPUT_DIR, f"{base_name}_snake_contour.png")
+    
+    visualize_and_save_contour(color_img, final_contour, output_filename, show_window=VISUALIZE)

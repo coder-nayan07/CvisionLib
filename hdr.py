@@ -1,49 +1,91 @@
+import cv2
 import numpy as np
-import cv2 as cv
+import os
+import sys
 
-# Load images
-ue = cv.imread(r"D:\autonomous_driving_system\computer vision\images\ue.jpg")
-ne = cv.imread(r"D:\autonomous_driving_system\computer vision\images\ne.jpg")
-oe = cv.imread(r"D:\autonomous_driving_system\computer vision\images\oe.jpg")
-
-# Ensure images are loaded
-if ue is None or ne is None or oe is None:
-    print("Error: One or more images not found.")
-    exit()
-
-# Resize images to the same dimensions
-size = (400, 400)
-uer = cv.resize(ue, size)
-ner = cv.resize(ne, size)
-oer = cv.resize(oe, size)
-
-# Display individual images
-cv.imshow('Underexposed', uer)
-cv.imshow('Normal Exposure', ner)
-cv.imshow('Overexposed', oer)
-
-# Convert images to float32 for HDR merging
-def merge_hdr_mertens(images):
-    """
-    Merges multiple exposure images using Mertens fusion and returns the HDR result.
+def load_images(image_paths: dict, size: tuple) -> dict:
+    """Loads and resizes all images from the provided paths."""
+    loaded_images = {}
+    for name, path in image_paths.items():
+        img = cv2.imread(path)
+        if img is None:
+            print(f"Warning: Could not load image '{name}' from '{path}'. Skipping.")
+            continue
+        loaded_images[name] = cv2.resize(img, size)
     
-    :param images: List of images (should be numpy arrays of the same size)
-    :return: HDR image after Mertens exposure fusion (8-bit)
-    """
-    # Convert images to float32 for processing
-    images_float32 = [img.astype(np.float32) for img in images]
+    if not loaded_images:
+        sys.exit("Error: No images were successfully loaded.")
+        
+    return loaded_images
 
-    # Merge images using Mertens fusion
-    merge_mertens = cv.createMergeMertens()
-    hdr_mertens = merge_mertens.process(images_float32)
-
-    # Convert back to 8-bit for display
-    hdr_mertens = (hdr_mertens * 255).astype(np.uint8)
+def create_hdr_mertens(images: list) -> np.ndarray:
+    """Merges a list of exposures into a single HDR image using Mertens fusion."""
+    merge_mertens = cv2.createMergeMertens()
+    hdr_image = merge_mertens.process(images)
     
-    return hdr_mertens
+    # Convert from float [0, 1] to uint8 [0, 255] for saving and display
+    return np.clip(hdr_image * 255, 0, 255).astype(np.uint8)
 
-hdr_result = merge_hdr_mertens([ner, oer])
+def create_comparison_view(image_dict: dict, size: tuple) -> np.ndarray:
+    """Creates a 2x2 collage of images for comparison."""
+    # Create a blank canvas for the 2x2 grid
+    canvas = np.zeros((size[1] * 2, size[0] * 2, 3), dtype=np.uint8)
+    
+    # Define positions and add text labels to each image
+    positions = {
+        'underexposed': (0, 0),
+        'normal': (size[0], 0),
+        'overexposed': (0, size[1]),
+        'hdr_result': (size[0], size[1])
+    }
+    
+    labeled_images = {}
+    for name, img in image_dict.items():
+        labeled_img = img.copy()
+        cv2.putText(labeled_img, name.replace('_', ' ').title(), (10, 30),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        labeled_images[name] = labeled_img
 
-cv.imshow("hdr",hdr_result)
-cv.waitKey(0)
-cv.destroyAllWindows()
+    # Place images onto the canvas
+    for name, (x, y) in positions.items():
+        if name in labeled_images:
+            canvas[y:y + size[1], x:x + size[0]] = labeled_images[name]
+            
+    return canvas
+    
+# --- Main Execution ---
+if __name__ == "__main__":
+
+    # --- Configuration ---
+    IMAGE_PATHS = {
+        'underexposed': "images/ue.jpg",
+        'normal': "images/ne.jpg",
+        'overexposed': "images/oe.jpg"
+    }
+    OUTPUT_DIR = "output"
+    VISUALIZE = True  # Set to False to disable the display window
+    TARGET_SIZE = (400, 400)
+
+    # --- Script ---
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+    # 1. Load and prepare all input images
+    images = load_images(IMAGE_PATHS, TARGET_SIZE)
+    
+    # 2. Create the HDR image
+    hdr_result = create_hdr_mertens(list(images.values()))
+    print("HDR image created successfully.")
+
+    # 3. Save only the HDR result
+    base_name = os.path.splitext(os.path.basename(IMAGE_PATHS['normal']))[0]
+    output_filename = os.path.join(OUTPUT_DIR, f"{base_name}_hdr_result.png")
+    cv2.imwrite(output_filename, hdr_result)
+    print(f"Result saved to: {output_filename}")
+
+    # 4. If visualizing, create and show the comparison view
+    if VISUALIZE:
+        images['hdr_result'] = hdr_result
+        comparison_image = create_comparison_view(images, TARGET_SIZE)
+        cv2.imshow("HDR Comparison", comparison_image)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()

@@ -1,68 +1,87 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import cv2 as cv
+import os
+import sys
 
-def plot_grayscale_histogram(img):
-    """
-    Takes an uploaded image, converts it to grayscale if needed, and plots its histogram.
-    
-    Parameters:
-    img (numpy.ndarray): Input image.
-    """
- 
+def load_image(path):
+    """Loads an image from a relative path and handles errors."""
+    img = cv.imread(path)
+    if img is None:
+        print(f"Error: Could not load image from path: {path}")
+        print("Please ensure the file exists in the correct subfolder.")
+        sys.exit() 
+    return img
+
+def plot_grayscale_histogram(img, title="Grayscale Histogram"):
+    """Plots the histogram of a grayscale image."""
     if len(img.shape) == 3:
         img = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
     
- 
-    img = img.astype(np.float32) / 255.0
+    histogram = cv.calcHist([img], [0], None, [256], [0, 256])
     
-    # Compute histogram
-    histogram, bin_edges = np.histogram(img, bins=256, range=(0.0, 1.0))
-    
-    # Plot histogram
-    fig, ax = plt.subplots()
-    ax.plot(bin_edges[:-1], histogram, color='black')
-    ax.set_title("Grayscale Histogram")
-    ax.set_xlabel("Grayscale Value")
-    ax.set_ylabel("Pixels")
-    ax.set_xlim(0, 1.0)
+    plt.figure()
+    plt.title(title)
+    plt.xlabel("Grayscale Value (0-255)")
+    plt.ylabel("Pixel Count")
+    plt.plot(histogram, color='black')
+    plt.xlim([0, 256])
     plt.show()
 
-# load images
+def binarize_image(img_gs, threshold_value):
+    """Applies a fixed binary threshold to a grayscale image."""
+    _, binarized_img = cv.threshold(img_gs, threshold_value, 255, cv.THRESH_BINARY)
+    return binarized_img
 
-shape1 = cv.imread(r"D:\autonomous_driving_system\computer vision\images\for_binarization.jpg")
-shape2 = cv.imread(r"D:\autonomous_driving_system\computer vision\images\bin2.jpg")
-# resizing
-size = (400, 400)
-shape1r = cv.resize(shape1, size)
-shape2r = cv.resize(shape2, size)
+def save_image(img, directory, filename):
+    """Saves an image to a specified directory, creating it if needed."""
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    
+    save_path = os.path.join(directory, filename)
+    cv.imwrite(save_path, img)
+    print(f"Image saved to: {save_path}")
 
-cv.imshow("shape1", shape1r)
-cv.imshow("shape2", shape2r)
+def main(vis=False, size=None):
+    """Main function to run the image processing workflow."""
+    # Load images using relative paths
+    shape1 = load_image("images/for_binarization.jpg")
+    shape2 = load_image("images/bin2.jpg")
 
-# histogram plotting
-plot_grayscale_histogram(shape1r)
-plot_grayscale_histogram(shape2r)
+    if size != None:
+        shape1 = cv.resize(shape1, size)
+        shape2 = cv.resize(shape2, size)
 
 
-# convert to grayscale
-shape1gs = cv.cvtColor(shape1r, cv.COLOR_BGR2GRAY)
-shape2gs = cv.cvtColor(shape2r, cv.COLOR_BGR2GRAY)
-# apply thresholding
-threshold = 220
-shape1_bin = np.where(shape1gs > threshold, 255, 0).astype(np.uint8)
-# cv.imshow("shape1bin", shape1_bin)
-cv.imshow("shape1bin", shape1gs)
+    # Display originals and their histograms
+    if vis:
+        cv.imshow("Original Shape 1", shape1)
+        cv.imshow("Original Shape 2", shape2)
+        plot_grayscale_histogram(shape1, "Histogram of Shape 1")
+        plot_grayscale_histogram(shape2, "Histogram of Shape 2")
 
-threshold = 100
-shape2_bin = np.where(shape2gs > threshold, 255, 0).astype(np.uint8)
-# cv.imshow("shape2bin", shape2_bin)
-cv.imshow("shape2bin", shape2gs)
+    # Convert to grayscale
+    shape1_gs = cv.cvtColor(shape1, cv.COLOR_BGR2GRAY)
+    shape2_gs = cv.cvtColor(shape2, cv.COLOR_BGR2GRAY)
 
-save_path = (r"D:\autonomous_driving_system\computer vision\images\shape1_binarized.jpg")
-cv.imwrite(save_path, shape1_bin)
+    # Apply binarization with different thresholds
+    shape1_bin = binarize_image(shape1_gs, threshold_value=220)
+    shape2_bin = binarize_image(shape2_gs, threshold_value=100)
 
-# otsu thresholding
+    # Display binarized results
+    if vis:
+        cv.imshow("Binarized Shape 1", shape1_bin)
+        cv.imshow("Binarized Shape 2", shape2_bin)
 
-cv.waitKey()
-cv.destroyAllWindows()
+    # Save one of the processed images
+    save_image(shape1_bin, "output", "shape1_binarized.jpg")
+
+    # Wait for user input to close windows
+    cv.waitKey(0)
+    cv.destroyAllWindows()
+
+if __name__ == "__main__":
+    # pass the flag to see the visualisations
+    vis = True
+    size = (400, 400)
+    main(vis, size)
