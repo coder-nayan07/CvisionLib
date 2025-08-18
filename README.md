@@ -83,7 +83,7 @@ It demonstrates both a manual sliding window approach using **Sum of Squared Dif
 A classic computer vision task, this script uses a pre-trained Haar Cascade classifier to detect human faces in an image and draws a bounding box around each one.
 
 **Face Detection Result:**
-![Face Detection Result](output/bearded-mature-man-making-multiple-expressions_faces_detected.png)
+![Face Detection Result](output/Lenna_test_image_faces_detected.png)
 
 ---
 
@@ -94,10 +94,10 @@ This script showcases a variety of common image processing operations.
 * **Geometric Transformations:** Demonstrates how to translate, rotate, and apply complex affine transformations to an image using OpenCV's optimized functions.
 
 **Sobel Edge Detection:**
-![Sobel Edge Detection](output/Lenna_test_image_sobel.png)
+![Sobel Edge Detection](output/filters_and_transforms/Lenna_test_image_sobel.png)
 
 **Affine Transformation:**
-![Affine Transformation](output/Lenna_test_image_affine.png)
+![Affine Transformation](output/filters_and_transforms/Lenna_test_image_affine.png)
 
 ---
 
@@ -108,7 +108,7 @@ This script implements a manual algorithm to find and label all distinct, connec
 It uses a Depth-First Search (DFS) approach to traverse and label each component, effectively counting the number of separate objects in the image and color-coding them for visualization.
 
 **Connected Components Result:**
-![Connected Components Result](output/shape1_binarized_components.png)
+![Connected Components Result](output/bin2_components.png)
 
 ---
 
@@ -116,7 +116,7 @@ It uses a Depth-First Search (DFS) approach to traverse and label each component
 This script converts an image from the spatial domain to the frequency domain using a manual implementation of the 2D Discrete Fourier Transform (DFT). The resulting magnitude spectrum shows the image's frequency components, with low frequencies (general structure) at the center and high frequencies (fine details) towards the edges.
 
 **DFT Magnitude Spectrum:**
-![DFT Magnitude Spectrum](output/Lenna_test_image_spectrum.png)
+![DFT Magnitude Spectrum](output/filters_and_transforms/Lenna_test_image_spectrum.png)
 
 ---
 
